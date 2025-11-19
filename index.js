@@ -1,52 +1,87 @@
-import { Client, GatewayIntentBits } from "discord.js";
-import axios from "axios";
+const { Client, GatewayIntentBits, PermissionsBitField } = require('discord.js');
+const axios = require('axios');
 
 const TOKEN = process.env.BOT_TOKEN;
-const N8N_WEBHOOK = process.env.N8N_WEBHOOK;
+const WEBHOOK_URL = process.env.WEBHOOK_URL; // Twój webhook2
+const GUILD_ID = process.env.GUILD_ID;       // Serwer gdzie bot działa
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.DirectMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMessages
-  ],
-  partials: ["CHANNEL"]  // ważne! pozwala odbierać DM
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.DirectMessages
+    ]
 });
 
-// Po starcie
-client.on("ready", () => {
-  console.log(`Bot zalogowany jako: ${client.user.tag}`);
+client.once('ready', () => {
+    console.log(`Bot zalogowany jako: ${client.user.tag}`);
 });
 
-// ⭐ ZMIANA 1 — odbiór DM i wysyłka channelId do n8n
-client.on("messageCreate", async (message) => {
-  try {
-    // ignoruj wiadomości botów
-    if (message.author.bot) return;
+/**
+ * Tworzy prywatny kanał dla użytkownika (jeśli nie istnieje)
+ */
+async function ensurePrivateChannel(userId) {
+    const guild = await client.guilds.fetch(GUILD_ID);
+    const channels = await guild.channels.fetch();
 
-    // jeżeli to DM (Direct Message)
-    if (message.channel.type === 1) {  
-      console.log("DM od:", message.author.username, "-", message.content);
+    // Szukamy kanału
+    let channel = channels.find(c => c.name === `pp-${userId}`);
 
-      // wysyłamy pełne dane do webhooka n8n
-      await axios.post(N8N_WEBHOOK, {
-        userId: message.author.id,
-        username: message.author.username,
-        content: message.content,
-        channelId: message.channel.id,       // <<< NAJWAŻNIEJSZE
-        timestamp: new Date().toISOString()
-      });
+    if (!channel) {
+        console.log(`Tworzę kanał dla: ${userId}`);
 
-      // odpowiedź bota (opcjonalna)
-      await message.reply("Dziękuję! Jesteś już zarejestrowany ✔");
+        channel = await guild.channels.create({
+            name: `pp-${userId}`,
+            type: 0, // CHANNEL_TEXT
+            permissionOverwrites: [
+                {
+                    id: guild.roles.everyone.id,
+                    deny: [PermissionsBitField.Flags.ViewChannel]
+                },
+                {
+                    id: userId,
+                    allow: [
+                        PermissionsBitField.Flags.ViewChannel,
+                        PermissionsBitField.Flags.SendMessages
+                    ]
+                },
+                {
+                    id: client.user.id,
+                    allow: [
+                        PermissionsBitField.Flags.ViewChannel,
+                        PermissionsBitField.Flags.SendMessages
+                    ]
+                }
+            ]
+        });
     }
 
-  } catch (error) {
-    console.error("Błąd DM:", error.message);
-  }
+    return channel.id;
+}
+
+client.on('messageCreate', async (message) => {
+
+    if (message.author.bot) return;
+
+    const userId = message.author.id;
+    const username = message.author.username;
+    const content = message.content;
+    const timestamp = message.createdTimestamp;
+
+    // tworzymy lub pobieramy prywatny kanał
+    const privateChannelId = await ensurePrivateChannel(userId);
+
+    // wysyłamy do webhook2
+    await axios.post(WEBHOOK_URL, {
+        userId,
+        username,
+        content,
+        privateChannelId,
+        timestamp
+    });
+
+    console.log(`Wysłano event dla użytkownika ${username}`);
 });
 
-// Logowanie bota
 client.login(TOKEN);
